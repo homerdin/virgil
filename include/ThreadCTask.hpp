@@ -138,16 +138,16 @@ void MARC::ThreadCTask::execute (void){
    * Check if we have been asked to set the affinity of the thread that will run the task.
    */
   if (this->useAffinity){
-
+//    std::cerr << "BRIAN, we were using affinity\n";
     /*
      * Set the thread affinity.
      */
-    auto self = pthread_self();
-    auto exitCode = pthread_setaffinity_np(self, sizeof(cpu_set_t), &(this->cores));
-    if (exitCode != 0) {
-      std::cerr << "ThreadPool: Error calling pthread_setaffinity_np: " << exitCode << std::endl;
-      abort();
-    }
+//    auto self = pthread_self();
+//    auto exitCode = pthread_setaffinity_np(self, sizeof(cpu_set_t), &(this->cores));
+//    if (exitCode != 0) {
+  //    std::cerr << "ThreadPool: Error calling pthread_setaffinity_np: " << exitCode << std::endl;
+    //  abort();
+    //}
   }
 
   /*

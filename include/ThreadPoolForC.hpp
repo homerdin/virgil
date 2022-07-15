@@ -33,6 +33,7 @@
 #include <type_traits>
 #include <utility>
 #include <vector>
+#include <sstream>
 
 namespace MARC {
 
@@ -89,8 +90,8 @@ namespace MARC {
       ThreadCTask * getTask (void);
 
     private:
-      std::vector<ThreadCTask *> memoryPool;
-      mutable pthread_spinlock_t memoryPoolLock;
+      std::vector<ThreadCTask *> memoryPool[112];
+      mutable pthread_spinlock_t memoryPoolLock[112];
   };
 
 }
@@ -114,29 +115,36 @@ MARC::ThreadPoolForC::ThreadPoolForC (
   std::function <void (void)> codeToExecuteAtDeconstructor
   ) : ThreadPoolInterface{extendible, numThreads, codeToExecuteAtDeconstructor}
   {
-  pthread_spin_init(&this->memoryPoolLock, 0);
+    for(int i=0; i< numThreads; i++){
+      pthread_spin_init(&this->memoryPoolLock[i], 0);
+    }
   return ;
 }
 
 MARC::ThreadCTask * MARC::ThreadPoolForC::getTask (void){
 
+
+  auto pid = getCurrentThreadQId();
+//  std::stringstream  msg;
+//  msg << "about to lock memoryPool pid = " << pid;
+//  std::cerr << msg.str();
   /*
    * Fetch the memory.
    */
   ThreadCTask *cTask = nullptr;
-  pthread_spin_lock(&this->memoryPoolLock);
-  auto poolSize = this->memoryPool.size();
+  pthread_spin_lock(&this->memoryPoolLock[pid]);
+  auto poolSize = this->memoryPool[pid].size();
   for (auto i = 0; i < poolSize; i++){
-    if (this->memoryPool[i]->getAvailability()){
-      cTask = this->memoryPool[i];
+    if (this->memoryPool[pid][i]->getAvailability()){
+      cTask = this->memoryPool[pid][i];
       break ;
     }
   }
   if (cTask == nullptr){
     cTask = new ThreadCTask(poolSize);
-    this->memoryPool.push_back(cTask);
+    this->memoryPool[pid].push_back(cTask);
   }
-  pthread_spin_unlock(&this->memoryPoolLock);
+  pthread_spin_unlock(&this->memoryPoolLock[pid]);
 
   return cTask;
 }

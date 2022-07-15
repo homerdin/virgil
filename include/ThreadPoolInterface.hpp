@@ -23,6 +23,7 @@
 #include <algorithm>
 #include <atomic>
 #include <cstdint>
+#include <cstdlib>
 #include <functional>
 #include <map>
 #include <memory>
@@ -32,9 +33,14 @@
 #include <vector>
 #include <assert.h>
 #include <hwloc.h>
+#include <sstream>
+
+#define BRIAN 0
+//#define BRIAN 1
 
 namespace MARC {
 
+      _Thread_local uint32_t threadQId;
   /*
    * Thread pool.
    */
@@ -109,6 +115,8 @@ namespace MARC {
       hwloc_topology_t topo;
       uint32_t nextCore;
       std::map<uint32_t, uint32_t> coreToQIdMap;
+      std::map<uint32_t, uint32_t> QIdToQCoreMap;
+      bool enableSMT;
 
       /*
        * Expand the pool if possible and necessary.
@@ -161,7 +169,8 @@ MARC::ThreadPoolInterface::ThreadPoolInterface (
   m_done{false},
   m_threads{},
   codeToExecuteByTheDeconstructor{},
-  nextCore(1)
+  nextCore(1),
+  enableSMT(false)
   {
 
   /*
@@ -183,13 +192,39 @@ MARC::ThreadPoolInterface::ThreadPoolInterface (
    * Bind main thread to core 0 here
    *
    */
-  hwloc_obj_t coreObj = hwloc_get_obj_by_type(this->topo, HWLOC_OBJ_CORE, 0);
-  hwloc_set_cpubind(topo, coreObj->children[0]->cpuset, 0);
+//  hwloc_obj_t coreObj = hwloc_get_obj_by_type(this->topo, HWLOC_OBJ_PU, 0);
+//  std::cerr << "Got coreObj 0\n";
+  //hwloc_set_cpubind(topo, coreObj->children[0]->cpuset, 0);
+//  hwloc_set_cpubind(topo, coreObj->cpuset, 0);
 
-  int coreId = hwloc_bitmap_first(coreObj->children[0]->cpuset); 
+  auto cpu = 0;
+  cpu_set_t cpuset;
+  CPU_ZERO(&cpuset);
+  CPU_SET(cpu, &cpuset);
+  pthread_t current_thread = pthread_self();
+  pthread_setaffinity_np(current_thread, sizeof(cpu_set_t), &cpuset);
 
-  assert(coreId == 0 && "main tread is not bound to core 0"); 
-  coreToQIdMap[coreId] = 0;
+  if(BRIAN) {std::cout << "Main Thread started " << std::endl
+             << "It's thread id is main"  << std::endl
+             << "It's logical id(affinity) is " << cpu << std::endl
+             << "It's Qid is None" << std::endl
+             << "It's threadQId is " << threadQId << std::endl;}
+  
+//  int coreId = hwloc_bitmap_first(coreObj->cpuset); 
+
+//  assert(coreId == 0 && "main tread is not bound to core 0"); 
+  coreToQIdMap[cpu] = 0;
+
+  /*
+   * Check if VIRGIL_ENABLE_SMT environment variable is set
+   * 
+   */
+  if(const char* env_p = std::getenv("VIRGIL_ENABLE_SMT")){
+      int env_val = atoi(env_p);
+      if(env_val){
+          enableSMT = true;
+      }
+  }
 
   return ;
 }
@@ -203,8 +238,21 @@ void MARC::ThreadPoolInterface::appendCodeToDeconstructor (std::function<void ()
 void MARC::ThreadPoolInterface::newThreads (std::uint32_t newThreadsToGenerate){
   assert(!this->m_done);
 
+
+  int  tp[] = {0,56,2,58,4,60,6,62,8,64,10,66,12,68,14,70,16,72,18,74,20,76,22,78,24,80,
+             26,82,28,84,30,86,32,88,34,90,36,92,38,94,40,96,42,98,44,100,46,102,48,104,
+             50,106,52,108,54,110,1,57,3,59,5,61,7,63,9,65,11,67,13,69,15,71,17,73,19,75,
+             21,77,23,79,25,81,27,83,29,85,31,87,33,89,35,91,37,93,39,95,41,97,43,99,45,101,
+             47,103,49,105,51,107,53,109,55,111};
+
+  for (auto i=0; i<112;i++){
+    coreToQIdMap[tp[i]] = i;
+    QIdToQCoreMap[i] = tp[i];
+  }
+
   for (auto i = 0; i < newThreadsToGenerate; i++){
 
+    if(BRIAN) {std::cerr << "Settin new Thread " << i << '\n';}
     /*
      * Create the availability flag.
      */
@@ -216,23 +264,66 @@ void MARC::ThreadPoolInterface::newThreads (std::uint32_t newThreadsToGenerate){
      */
     this->m_threads.emplace_back(&this->workerFunctionTrampoline, this, flag, i);
     auto &thread = this->m_threads.back();
-    
+
+    int rc = 0;
+    hwloc_obj_t coreObj;
+    int cpu;
     // Create a cpu_set_t object representing a set of CPUs. Clear it and mark
     // only CPU i as set.
-    hwloc_obj_t coreObj = hwloc_get_obj_by_type(this->topo, HWLOC_OBJ_CORE, nextCore);
+    if(enableSMT){
+      cpu = i+1;
+//      cpu_set_t cpuset;
+//      CPU_ZERO(&cpuset);
+//      CPU_SET(cpu, &cpuset);
+//      pthread_t current_thread = pthread_self();
+//      pthread_setaffinity_np(current_thread, sizeof(cpu_set_t), &cpuset);     
+  //    std::cerr << "Settin in enableMST " << '\n';
+    //  std::cerr << "nextCore = " << nextCore << '\n';
+//      coreObj = hwloc_get_obj_by_type(this->topo, HWLOC_OBJ_PU, nextCore);
+      //std::cerr << "coreObj = " << coreObj << '\n';
+      //std::cerr << "coreObj->cpuset = " << coreObj->cpuset << '\n';
+//      rc = hwloc_set_thread_cpubind(this->topo, thread.native_handle(),
+//              coreObj->cpuset, 0); 
+    }else{
+      cpu = i+1;
+//      cpu_set_t cpuset;
+//      CPU_ZERO(&cpuset);
+//      CPU_SET(cpu, &cpuset);
+//      pthread_t current_thread = pthread_self();
+//      pthread_setaffinity_np(current_thread, sizeof(cpu_set_t), &cpuset);     
 
-    int rc = hwloc_set_thread_cpubind(this->topo, thread.native_handle(),
-            coreObj->children[0]->cpuset, 0); 
-    
-    int coreId = hwloc_bitmap_first(coreObj->children[0]->cpuset);
-
-    coreToQIdMap[coreId] = nextCore;
-
-    if (rc != 0) {
-      std::cerr << "Error calling pthread_setaffinity_np: " << rc << "\n";
+//      coreObj = hwloc_get_obj_by_type(this->topo, HWLOC_OBJ_CORE, nextCore);
+//      rc = hwloc_set_thread_cpubind(this->topo, thread.native_handle(),
+//              coreObj->children[0]->cpuset, 0); 
     }
 
+  //  std::cerr << "Getting coreId " << '\n';
+//    int coreId;
+  //  if(enableSMT) { 
+    //  coreId = hwloc_bitmap_first(coreObj->cpuset);
+//    } else {
+    //  coreId = hwloc_bitmap_first(coreObj->children[0]->cpuset);
+  //  }
+
+//    std::cerr << "Settin qid map " << '\n';
+
+
+//    if (rc != 0) {
+  //    std::cerr << "Error calling pthread_setaffinity_np: " << rc << "\n";
+//    }
+
     nextCore++;
+  }
+
+  if(BRIAN){
+    //for (auto const& x : coreToQIdMap)
+    for (auto const& x : QIdToQCoreMap)
+    {
+      std::cerr << x.second  // string (key)
+                << ':' 
+                << x.first // string's value 
+                << std::endl;
+    }
   }
 
   return ;
@@ -243,6 +334,8 @@ void MARC::ThreadPoolInterface::workerFunctionTrampoline (ThreadPoolInterface *p
     (*availability) = false;
     return ;
   }
+//  std::cerr << "B: workerFunctionTrampoline with thread = " << thread <<'\n';
+  threadQId = thread + 1;
   p->workerFunction(availability, thread);
   (*availability) = false;
 
@@ -300,15 +393,24 @@ void MARC::ThreadPoolInterface::waitAllThreadsToBeUnavailable (void) {
 
 uint32_t MARC::ThreadPoolInterface::getCurrentThreadQId(){
 
-  hwloc_bitmap_t set = hwloc_bitmap_alloc();
-  int err = hwloc_get_cpubind(this->topo, set, HWLOC_CPUBIND_THREAD);
-  if(err){
-     assert(false && "hwloc cpubind function failed\n"); 
-  }
+  return threadQId;
+//  hwloc_bitmap_t set = hwloc_bitmap_alloc();
+//  int err = hwloc_get_cpubind(this->topo, set, HWLOC_CPUBIND_THREAD);
+//  if(err){
+//     assert(false && "hwloc cpubind function failed\n"); 
+//  }
   
-  int coreId = hwloc_bitmap_first(set);
-  
-  return coreToQIdMap[coreId];
+//  int coreId = hwloc_bitmap_last(set);
+ 
+
+//  auto cpu = sched_getcpu() % 56;
+//  std::cerr << "CPU from sched_getcpu() = " << cpu << '\n';
+//  return coreToQIdMap[cpu];
+//  std::stringstream msg;
+//  msg << "coreID from hwloc = " << coreId << '\n';
+//  std::cerr << msg.str();
+ // if(coreId == 0) {return coreToQIdMap[coreId];}
+//  return coreToQIdMap[coreId] - 1;
 
 }
 
